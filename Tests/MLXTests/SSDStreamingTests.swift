@@ -96,4 +96,38 @@ final class SSDStreamingTests: XCTestCase {
         assertEqual(dst[0 ..< 1], full[3 ..< 4])
         assertEqual(dst[1 ..< 2], full[0 ..< 1])
     }
+
+    /// Byte offset of the "experts" tensor data, from the safetensors header.
+    private func dataStart(_ url: URL) throws -> UInt64 {
+        let data = try Data(contentsOf: url)
+        let headerLength = data.prefix(8).withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }
+        let header = try JSONSerialization.jsonObject(
+            with: data.subdata(in: 8 ..< 8 + Int(headerLength))) as! [String: Any]
+        let offsets = (header["experts"] as! [String: Any])["data_offsets"] as! [Int]
+        return 8 + headerLength + UInt64(offsets[0])
+    }
+
+    func testPreadRangeIntoMatchesExpertSlabs() throws {
+        let (url, full) = try makeExpertFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let start = try dataStart(url)
+        let bytesPerExpert = outDim * inDim * MemoryLayout<UInt32>.size
+        for noCache in [false, true] {
+            let dst = MLXArray.zeros([2, outDim, inDim], dtype: .uint32)
+            eval(dst)
+            XCTAssertEqual(
+                MLXFast.preadRangeInto(
+                    dst, dstOffset: bytesPerExpert, path: url.path,
+                    fileOffset: start + UInt64(2 * bytesPerExpert), length: bytesPerExpert,
+                    noCache: noCache), 0)
+            XCTAssertEqual(
+                MLXFast.preadRangeInto(
+                    dst, dstOffset: 0, path: url.path, fileOffset: start,
+                    length: bytesPerExpert, noCache: noCache), 0)
+
+            assertEqual(dst[0 ..< 1], full[0 ..< 1])
+            assertEqual(dst[1 ..< 2], full[2 ..< 3])
+        }
+    }
 }

@@ -410,6 +410,26 @@ public enum MLXFast {
         }
     }
 
+    /// Reads `length` bytes at `fileOffset` of `path` into `dst` at byte `dstOffset`.
+    /// `dst` must already be evaluated. With `noCache`, the read bypasses the
+    /// unified buffer cache (`F_NOCACHE`). Returns 0 on success.
+    @discardableResult
+    public static func preadRangeInto(
+        _ dst: MLXArray,
+        dstOffset: Int,
+        path: String,
+        fileOffset: UInt64,
+        length: Int,
+        noCache: Bool = false
+    ) -> Int32 {
+        precondition(dstOffset >= 0 && length >= 0, "dstOffset and length must be non-negative")
+        return path.withCString { pathPtr in
+            mlx_fast_pread_range_into(
+                dst.ctx, dstOffset, pathPtr, fileOffset, length,
+                noCache ? UInt32(MLX_FAST_PREAD_NOCACHE) : 0)
+        }
+    }
+
     /// Submits an asynchronous background prefetch for a specific expert's weights.
     /// The fetch is handled by a persistent C++ background thread and placed in a unified memory arena.
     public static func pappsPrefetch(

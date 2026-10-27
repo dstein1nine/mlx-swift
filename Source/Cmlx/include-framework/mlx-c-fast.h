@@ -261,6 +261,19 @@ int mlx_fast_pread_into_offset(
     uint32_t expert_index,
     size_t dst_offset);
 
+// Read `length` bytes at `file_offset` of `path` into dst at byte `dst_offset`.
+// The caller resolves file offsets (no safetensors parsing here). dst must be
+// evaluated. Flags: MLX_FAST_PREAD_NOCACHE opens the file with F_NOCACHE so the
+// read bypasses the unified buffer cache.
+#define MLX_FAST_PREAD_NOCACHE 1u
+int mlx_fast_pread_range_into(
+    mlx_array dst,
+    size_t dst_offset,
+    const char* path,
+    uint64_t file_offset,
+    size_t length,
+    uint32_t flags);
+
 // mlx_fast_submit_prefetch (PAPPS Background Worker)
 int mlx_fast_submit_prefetch(
     const char* safetensors_path,

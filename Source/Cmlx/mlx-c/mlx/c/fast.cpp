@@ -678,6 +678,7 @@ extern "C" int mlx_fast_scaled_dot_product_attention(
 #include <unistd.h>
 #include <json.hpp>
 #include <condition_variable>
+#include <cerrno>
 #include <cstring>
 #include <deque>
 #include <fstream>
@@ -1215,6 +1216,63 @@ extern "C" int mlx_fast_pread_into_offset(
         ssize_t result = pread(entry.fd, slot_buf, bpe, file_offset);
         if (result < 0 || (size_t)result != bpe)
             throw std::runtime_error("[pread_into_offset] pread failed: got " + std::to_string(result) + " of " + std::to_string(bpe));
+    } catch (std::exception& e) {
+        mlx_error(e.what());
+        return 1;
+    }
+    return 0;
+}
+
+// mlx_fast_pread_range_into — read `length` bytes at `file_offset` of `path`
+// into `dst.data() + dst_offset`. The caller resolves offsets, so this has no
+// safetensors knowledge. Descriptors are cached per (path, flags); with
+// MLX_FAST_PREAD_NOCACHE the descriptor has F_NOCACHE set.
+static std::mutex range_fd_mutex;
+static std::unordered_map<std::string, int> range_fds;
+
+static int range_fd(const std::string& path, uint32_t flags) {
+    std::string key = path + (flags & MLX_FAST_PREAD_NOCACHE ? "|nocache" : "|cached");
+    std::lock_guard<std::mutex> lock(range_fd_mutex);
+    auto it = range_fds.find(key);
+    if (it != range_fds.end()) return it->second;
+    int fd = open(path.c_str(), O_RDONLY);
+    if (fd < 0) throw std::runtime_error("[pread_range_into] Cannot open: " + path);
+    if ((flags & MLX_FAST_PREAD_NOCACHE) && fcntl(fd, F_NOCACHE, 1) != 0) {
+        close(fd);
+        throw std::runtime_error("[pread_range_into] F_NOCACHE failed: " + path);
+    }
+    range_fds[key] = fd;
+    return fd;
+}
+
+extern "C" int mlx_fast_pread_range_into(
+    mlx_array dst,
+    size_t dst_offset,
+    const char* path,
+    uint64_t file_offset,
+    size_t length,
+    uint32_t flags) {
+    try {
+        auto& arr = mlx_array_get_(dst);
+        void* base = const_cast<void*>(static_cast<const void*>(arr.data<uint8_t>()));
+        if (!base) throw std::runtime_error("[pread_range_into] dst has no data pointer — call eval() first");
+        size_t total = arr.nbytes();
+        if (dst_offset > total || length > total - dst_offset) {
+            throw std::runtime_error(
+                "[pread_range_into] dst_offset (" + std::to_string(dst_offset) +
+                ") + length (" + std::to_string(length) +
+                ") > dst.nbytes (" + std::to_string(total) + ")");
+        }
+        int fd = range_fd(std::string(path), flags);
+        uint8_t* out = static_cast<uint8_t*>(base) + dst_offset;
+        size_t done = 0;
+        while (done < length) {
+            ssize_t n = pread(fd, out + done, length - done, static_cast<off_t>(file_offset + done));
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0)
+                throw std::runtime_error("[pread_range_into] pread failed: got " + std::to_string(done) + " of " + std::to_string(length));
+            done += static_cast<size_t>(n);
+        }
     } catch (std::exception& e) {
         mlx_error(e.what());
         return 1;
