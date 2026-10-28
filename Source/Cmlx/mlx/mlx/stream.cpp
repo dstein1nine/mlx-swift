@@ -45,7 +45,12 @@ Stream default_stream(Device d) {
   }
   auto& s = default_stream_storage(d);
   if (!s.has_value()) {
-    s = new_stream(d.type);
+    // The default stream is reached from every thread that evaluates a graph
+    // (eval falls back to it for arrays without a primitive). new_stream would
+    // register its command encoder only in the creating thread's table, so a
+    // later eval on another thread fails with "There is no Stream(gpu, N) in
+    // current thread". Register it globally instead.
+    s = new_thread_unsafe_stream(d.type);
   }
   return s.value();
 }
